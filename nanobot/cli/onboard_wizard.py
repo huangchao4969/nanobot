@@ -4,7 +4,6 @@ import json
 import types
 from typing import Any, Callable, get_args, get_origin
 
-import questionary
 from loguru import logger
 from pydantic import BaseModel
 from rich.console import Console
@@ -20,6 +19,13 @@ from nanobot.config.loader import get_config_path, load_config
 from nanobot.config.schema import Config
 
 console = Console()
+
+
+def _questionary():
+    """Import questionary lazily so helper utilities remain importable without it."""
+    import questionary
+
+    return questionary
 
 # --- Field Hints for Select Fields ---
 # Maps field names to (choices, hint_text)
@@ -290,7 +296,7 @@ def _show_section_header(title: str, subtitle: str = "") -> None:
 
 def _input_bool(display_name: str, current: bool | None) -> bool | None:
     """Get boolean input via confirm dialog."""
-    return questionary.confirm(
+    return _questionary().confirm(
         display_name,
         default=bool(current) if current is not None else False,
     ).ask()
@@ -300,7 +306,7 @@ def _input_text(display_name: str, current: Any, field_type: str) -> Any:
     """Get text input and parse based on field type."""
     default = _format_value_for_input(current, field_type)
 
-    value = questionary.text(f"{display_name}:", default=default).ask()
+    value = _questionary().text(f"{display_name}:", default=default).ask()
 
     if value is None or value == "":
         return None
@@ -336,7 +342,7 @@ def _input_with_existing(
     has_existing = current is not None and current != "" and current != {} and current != []
 
     if has_existing and not isinstance(current, list):
-        choice = questionary.select(
+        choice = _questionary().select(
             display_name,
             choices=["Enter new value", "Keep existing value"],
             default="Keep existing value",
@@ -386,7 +392,7 @@ def _input_model_with_autocomplete(
                     display=model,
                 )
 
-    value = questionary.autocomplete(
+    value = _questionary().autocomplete(
         f"{display_name}:",
         choices=[""],  # Placeholder, actual completions from completer
         completer=DynamicModelCompleter(provider),
@@ -408,7 +414,7 @@ def _input_context_window_with_recommendation(
         choices.append("Keep existing value")
     choices.append("🔍 Get recommended value")
 
-    choice = questionary.select(
+    choice = _questionary().select(
         display_name,
         choices=choices,
         default="Enter new value",
@@ -438,7 +444,7 @@ def _input_context_window_with_recommendation(
             # Fall through to manual input
 
     # Manual input
-    value = questionary.text(
+    value = _questionary().text(
         f"{display_name}:",
         default=str(current_val) if current_val else "",
     ).ask()
@@ -951,7 +957,7 @@ def run_onboard() -> Config:
         try:
             _show_main_menu_header()
 
-            answer = questionary.select(
+            answer = _questionary().select(
                 "What would you like to configure?",
                 choices=[
                     "🔌 Configure LLM Provider",

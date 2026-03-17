@@ -987,6 +987,7 @@ nanobot supports multiple web search providers. Configure in `~/.nanobot/config.
 | Provider | Config fields | Env var fallback | Free |
 |----------|--------------|------------------|------|
 | `brave` (default) | `apiKey` | `BRAVE_API_KEY` | No |
+| `exa` | `apiKey` | `EXA_API_KEY` | Free tier(1000k per month, no credit card need) |
 | `tavily` | `apiKey` | `TAVILY_API_KEY` | No |
 | `jina` | `apiKey` | `JINA_API_KEY` | Free tier (10M tokens) |
 | `searxng` | `baseUrl` | `SEARXNG_BASE_URL` | Yes (self-hosted) |
@@ -1050,6 +1051,20 @@ When credentials are missing, nanobot automatically falls back to DuckDuckGo.
 }
 ```
 
+**Exa** (semantic/AI search):
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "exa",
+        "apiKey": "your-exa-api-key"
+      }
+    }
+  }
+}
+```
+
 **DuckDuckGo** (zero config):
 ```json
 {
@@ -1065,7 +1080,7 @@ When credentials are missing, nanobot automatically falls back to DuckDuckGo.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `provider` | string | `"brave"` | Search backend: `brave`, `tavily`, `jina`, `searxng`, `duckduckgo` |
+| `provider` | string | `"brave"` | Search backend: `brave`, `exa`, `tavily`, `jina`, `searxng`, `duckduckgo` |
 | `apiKey` | string | `""` | API key for Brave or Tavily |
 | `baseUrl` | string | `""` | Base URL for SearXNG |
 | `maxResults` | integer | `5` | Results per search (1–10) |
@@ -1162,9 +1177,26 @@ MCP tools are automatically discovered and registered on startup. The LLM can us
 
 ## 🧩 Multiple Instances
 
-Run multiple nanobot instances simultaneously with separate configs and runtime data. Use `--config` as the main entrypoint, and optionally use `--workspace` to override the workspace for a specific run.
+Run multiple nanobot instances simultaneously with separate configs and runtime data. Use `--config` as the main entrypoint. Optionally pass `--workspace` during `onboard` when you want to initialize or update the saved workspace for a specific instance.
 
 ### Quick Start
+
+If you want each instance to have its own dedicated workspace from the start, pass both `--config` and `--workspace` during onboarding.
+
+**Initialize instances:**
+
+```bash
+# Create separate instance configs and workspaces
+nanobot onboard --config ~/.nanobot-telegram/config.json --workspace ~/.nanobot-telegram/workspace
+nanobot onboard --config ~/.nanobot-discord/config.json --workspace ~/.nanobot-discord/workspace
+nanobot onboard --config ~/.nanobot-feishu/config.json --workspace ~/.nanobot-feishu/workspace
+```
+
+**Configure each instance:**
+
+Edit `~/.nanobot-telegram/config.json`, `~/.nanobot-discord/config.json`, etc. with different channel settings. The workspace you passed during `onboard` is saved into each config as that instance's default workspace.
+
+**Run instances:**
 
 ```bash
 # Instance A - Telegram bot
@@ -1265,7 +1297,8 @@ nanobot gateway --config ~/.nanobot-telegram/config.json --workspace /tmp/nanobo
 
 | Command | Description |
 |---------|-------------|
-| `nanobot onboard` | Initialize config & workspace |
+| `nanobot onboard` | Initialize config & workspace at `~/.nanobot/` |
+| `nanobot onboard -c <config> -w <workspace>` | Initialize or refresh a specific instance config and workspace |
 | `nanobot agent -m "..."` | Chat with the agent |
 | `nanobot agent -w <workspace>` | Chat against a specific workspace |
 | `nanobot agent -w <workspace> -c <config>` | Chat against a specific workspace/config |

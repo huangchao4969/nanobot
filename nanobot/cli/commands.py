@@ -261,26 +261,39 @@ def main(
 
 
 @app.command()
-def onboard():
+def onboard(
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+):
     """Initialize nanobot configuration and workspace with interactive wizard."""
-    from nanobot.config.loader import get_config_path, load_config, save_config
+    from nanobot.config.loader import get_config_path, load_config, save_config, set_config_path
     from nanobot.config.schema import Config
 
-    config_path = get_config_path()
-
-    if config_path.exists():
-        config = load_config()
+    if config:
+        config_path = Path(config).expanduser().resolve()
+        set_config_path(config_path)
+        console.print(f"[dim]Using config: {config_path}[/dim]")
     else:
-        config = Config()
-        save_config(config)
+        config_path = get_config_path()
+
+    def _apply_workspace_override(loaded: Config) -> Config:
+        if workspace:
+            loaded.agents.defaults.workspace = workspace
+        return loaded
+
+    runtime_config = _apply_workspace_override(load_config(config_path) if config_path.exists() else Config())
+    created_config = not config_path.exists()
+    save_config(runtime_config, config_path)
+    if created_config:
         console.print(f"[green]✓[/green] Created config at {config_path}")
+    console.print("[dim]Config template now uses `maxTokens` + `contextWindowTokens`; `memoryWindow` is no longer a runtime setting.[/dim]")
 
     # Run interactive wizard
     from nanobot.cli.onboard_wizard import run_onboard
 
     try:
-        config = run_onboard()
-        save_config(config)
+        runtime_config = _apply_workspace_override(run_onboard())
+        save_config(runtime_config, config_path)
         console.print(f"[green]✓[/green] Config saved at {config_path}")
     except Exception as e:
         console.print(f"[red]✗[/red] Error during configuration: {e}")
@@ -289,18 +302,21 @@ def onboard():
 
     _onboard_plugins(config_path)
 
-    # Create workspace
-    workspace = get_workspace_path()
+    # Create workspace, preferring the configured workspace path.
+    workspace_path = get_workspace_path(runtime_config.workspace_path)
+    if not workspace_path.exists():
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        console.print(f"[green]✓[/green] Created workspace at {workspace_path}")
 
-    if not workspace.exists():
-        workspace.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]✓[/green] Created workspace at {workspace}")
+    sync_workspace_templates(workspace_path)
 
-    sync_workspace_templates(workspace)
+    agent_cmd = 'nanobot agent -m "Hello!"'
+    if config:
+        agent_cmd += f" --config {config_path}"
 
     console.print(f"\n{__logo__} nanobot is ready!")
     console.print("\nNext steps:")
-    console.print("  1. Chat: [cyan]nanobot agent -m \"Hello!\"[/cyan]")
+    console.print(f"  1. Chat: [cyan]{agent_cmd}[/cyan]")
     console.print("  2. Start gateway: [cyan]nanobot gateway[/cyan]")
     console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/HKUDS/nanobot#-chat-apps[/dim]")
 
@@ -363,6 +379,7 @@ def _make_provider(config: Config):
             api_key=p.api_key if p else "no-key",
             api_base=config.get_api_base(model) or "http://localhost:8000/v1",
             default_model=model,
+            extra_headers=p.extra_headers if p else None,
         )
     # Azure OpenAI: direct Azure OpenAI endpoint with deployment name
     elif provider_name == "azure_openai":
@@ -623,6 +640,38 @@ def gateway(
     asyncio.run(run())
 
 
+
+
+# ============================================================================
+# Web Interface
+# ============================================================================
+
+
+@app.command()
+def web(
+    port: int = typer.Option(8000, "--port", "-p", help="Port to listen on"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+):
+    """Start the nanobot web interface."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]uvicorn not installed.[/red] Run: pip install 'nanobot-ai[web]'")
+        raise typer.Exit(1)
+
+    try:
+        from fastapi import FastAPI  # noqa: F401
+    except ImportError:
+        console.print("[red]fastapi not installed.[/red] Run: pip install 'nanobot-ai[web]'")
+        raise typer.Exit(1)
+
+    from nanobot.web.server import create_app
+
+    console.print(f"{__logo__} Starting web interface at http://{host}:{port} ...")
+    app_instance = create_app(config, workspace)
+    uvicorn.run(app_instance, host=host, port=port)
 
 
 # ============================================================================
