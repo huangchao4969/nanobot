@@ -265,6 +265,12 @@ def onboard(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
     non_interactive: bool = typer.Option(False, "--non-interactive", help="Skip interactive wizard"),
+    preserve_sections: bool = typer.Option(
+        False,
+        "--preserve-sections",
+        "-p",
+        help="Only merge new fields into existing sections; don't add removed channels/providers back.",
+    ),
 ):
     """Initialize nanobot configuration and workspace."""
     from nanobot.config.loader import get_config_path, load_config, save_config, set_config_path
@@ -282,20 +288,38 @@ def onboard(
             loaded.agents.defaults.workspace = workspace
         return loaded
 
+    # Track whether config existed before we started
+    config_existed = config_path.exists()
+    
+    # Determine preserve_sections choice
+    chosen_preserve = preserve_sections  # Start with CLI flag default
+    
     # Non-interactive mode: simple config creation/update
     if non_interactive:
-        if config_path.exists():
+        if config_existed:
             console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
             console.print("  [bold]y[/bold] = overwrite with defaults (existing values will be lost)")
-            console.print("  [bold]N[/bold] = refresh config, keeping existing values and adding new fields")
-            if typer.confirm("Overwrite?"):
+            console.print("  [bold]n[/bold] = refresh config, add all discovered channels")
+            console.print("  [bold]p[/bold] = refresh config, preserve existing sections only")
+            
+            # Use prompt for three-way choice
+            choice = typer.prompt("Choice", default="n" if not preserve_sections else "p", show_default=False)
+            choice = choice.lower().strip()
+            
+            if choice == "y":
                 config = _apply_workspace_override(Config())
                 save_config(config, config_path)
                 console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
-            else:
+            elif choice == "p":
                 config = _apply_workspace_override(load_config(config_path))
                 save_config(config, config_path)
-                console.print(f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)")
+                console.print(f"[green]✓[/green] Config refreshed at {config_path} (existing sections preserved)")
+                chosen_preserve = True
+            else:  # default to 'n'
+                config = _apply_workspace_override(load_config(config_path))
+                save_config(config, config_path)
+                console.print(f"[green]✓[/green] Config refreshed at {config_path} (all channels added)")
+                chosen_preserve = False
         else:
             config = _apply_workspace_override(Config())
             save_config(config, config_path)
@@ -303,7 +327,7 @@ def onboard(
         console.print("[dim]Config template now uses `maxTokens` + `contextWindowTokens`; `memoryWindow` is no longer a runtime setting.[/dim]")
     else:
         # Interactive mode: use wizard
-        if config_path.exists():
+        if config_existed:
             config = load_config()
         else:
             config = Config()
@@ -322,8 +346,24 @@ def onboard(
             console.print(f"[red]✗[/red] Error during configuration: {e}")
             console.print("[yellow]Please run 'nanobot onboard' again to complete setup.[/yellow]")
             raise typer.Exit(1)
+        
+        # After wizard, ask about sections if config existed before
+        if config_existed:
+            console.print("\n[yellow]Config already existed. How should discovered channels be handled?[/yellow]")
+            console.print("  [bold]n[/bold] = add all discovered channels (default)")
+            console.print("  [bold]p[/bold] = preserve existing sections only")
+            
+            choice = typer.prompt("Choice", default="p" if preserve_sections else "n", show_default=False)
+            choice = choice.lower().strip()
+            
+            if choice == "p":
+                chosen_preserve = True
+                console.print("[dim]Only existing sections will be updated.[/dim]")
+            else:
+                chosen_preserve = False
+                console.print("[dim]All discovered channels will be added.[/dim]")
 
-    _onboard_plugins(config_path)
+    _onboard_plugins(config_path, preserve_sections=chosen_preserve)
 
     # Create workspace, preferring the configured workspace path.
     workspace = get_workspace_path(config.workspace_path)
@@ -363,8 +403,14 @@ def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
     return merged
 
 
-def _onboard_plugins(config_path: Path) -> None:
-    """Inject default config for all discovered channels (built-in + plugins)."""
+def _onboard_plugins(config_path: Path, preserve_sections: bool = False) -> None:
+    """Inject default config for all discovered channels (built-in + plugins).
+    
+    Args:
+        config_path: Path to the config file
+        preserve_sections: If True, only merge into existing channels, don't add new ones.
+                          Preserves user's choice to maintain a minimal config.
+    """
     import json
 
     from nanobot.channels.registry import discover_all
@@ -379,8 +425,11 @@ def _onboard_plugins(config_path: Path) -> None:
     channels = data.setdefault("channels", {})
     for name, cls in all_channels.items():
         if name not in channels:
-            channels[name] = cls.default_config()
+            # Only add new channels if not preserving sections
+            if not preserve_sections:
+                channels[name] = cls.default_config()
         else:
+            # Always merge missing defaults into existing channels
             channels[name] = _merge_missing_defaults(channels[name], cls.default_config())
 
     with open(config_path, "w", encoding="utf-8") as f:
