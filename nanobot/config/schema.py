@@ -159,6 +159,9 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
 
+    # Reserved field to store original {env:VAR} values for save_config
+    _env_refs: dict | None = None
+
     @property
     def workspace_path(self) -> Path:
         """Get expanded workspace path."""
