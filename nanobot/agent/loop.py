@@ -491,7 +491,7 @@ class AgentLoop:
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
-            self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
@@ -522,7 +522,7 @@ class AgentLoop:
         if result := await self.commands.dispatch(ctx):
             return result
 
-        self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
         self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
         if message_tool := self.tools.get("message"):
