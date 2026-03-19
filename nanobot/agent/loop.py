@@ -30,7 +30,7 @@ from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
-    from nanobot.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
+    from nanobot.config.schema import ChannelsConfig, ExecToolConfig, InputLimitsConfig, WebSearchConfig
     from nanobot.cron.service import CronService
 
 
@@ -59,13 +59,14 @@ class AgentLoop:
         web_search_config: WebSearchConfig | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
+        input_limits: InputLimitsConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
     ):
-        from nanobot.config.schema import ExecToolConfig, WebSearchConfig
+        from nanobot.config.schema import ExecToolConfig, InputLimitsConfig, WebSearchConfig
 
         self.bus = bus
         self.channels_config = channels_config
@@ -77,10 +78,11 @@ class AgentLoop:
         self.web_search_config = web_search_config or WebSearchConfig()
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
+        self.input_limits = input_limits or InputLimitsConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
 
-        self.context = ContextBuilder(workspace)
+        self.context = ContextBuilder(workspace, input_limits=self.input_limits)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
@@ -169,21 +171,42 @@ class AgentLoop:
             return None
         return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
 
-    @staticmethod
-    def _tool_hint(tool_calls: list) -> str:
+    def _tool_hint(self, tool_calls: list) -> str:
         """Format tool calls as concise hint, e.g. 'web_search("query")'."""
+        workspace_str = str(self.workspace)
+        
         def _fmt(tc):
             args = (tc.arguments[0] if isinstance(tc.arguments, list) else tc.arguments) or {}
-            val = next(iter(args.values()), None) if isinstance(args, dict) else None
+            
+            val = None
+            if isinstance(args, dict):
+                # Iterate through all string values to find the first meaningful one
+                for v in args.values():
+                    if isinstance(v, str):
+                        val = v
+                        break
+                            
             if not isinstance(val, str):
                 return tc.name
+                
+            if self.restrict_to_workspace:
+                import os
+                # If it looks like an absolute path, normalize it to resolve '..' and '.'
+                if os.path.isabs(val):
+                    val = os.path.normpath(val)
+                # Replace workspace path with empty string to hide it
+                if workspace_str in val:
+                    val = val.replace(workspace_str, "").lstrip("\\/")
+                
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
+            
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
     async def _run_agent_loop(
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        session: Session | None = None
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop."""
         messages = initial_messages
@@ -226,6 +249,29 @@ class AgentLoop:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+
+                    # Record message tool usage in corresponding session
+                    if tool_call.name == "message" and result is not None:
+                        content = tool_call.arguments.get("content")
+                        if content:
+
+                            # Find the session id of the session the message was sent to (wasn't available as tool call argument, for some reason)
+                            import re
+                            match = re.search(r"Message sent to (\S+)", result) # Example: Message sent to telegram:123456789 with 1 attachments
+                            finalMessageSessionId = match.group(1) if match else None
+
+                            if (
+                                finalMessageSessionId is not None and
+                                any(s.get("key") == finalMessageSessionId for s in self.sessions.list_sessions())
+                            ):
+                                finalMessageSession = self.sessions.get_or_create(finalMessageSessionId)
+                            else:
+                                finalMessageSession = session # If the session id is not found, use the current session as fallback
+                            
+                            if finalMessageSession is not None:
+                                finalMessageSession.add_message("assistant", content, via_tool="message")
+                                self.sessions.save(finalMessageSession)
+                    
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -429,6 +475,10 @@ class AgentLoop:
             channel=msg.channel, chat_id=msg.chat_id,
         )
 
+        # Add user message to session immediately
+        self._save_turn(session, initial_messages, 1 + len(history))
+        self.sessions.save(session)
+
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
@@ -438,13 +488,13 @@ class AgentLoop:
             ))
 
         final_content, _, all_msgs = await self._run_agent_loop(
-            initial_messages, on_progress=on_progress or _bus_progress,
+            initial_messages, on_progress=on_progress or _bus_progress, session=session
         )
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history))
+        self._save_turn(session, all_msgs, 2 + len(history))
         self.sessions.save(session)
         self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
 
