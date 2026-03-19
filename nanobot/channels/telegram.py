@@ -351,13 +351,20 @@ class TelegramChannel(BaseChannel):
         if not msg.metadata.get("_progress", False):
             self._stop_typing(msg.chat_id)
 
+        raw_chat_id = str(msg.chat_id)
+        message_thread_id = msg.metadata.get("message_thread_id")
+        
+        if ":topic:" in raw_chat_id:
+            parts = raw_chat_id.split(":topic:")
+            raw_chat_id = parts[0]
+            message_thread_id = int(parts[1])
+
         try:
-            chat_id = int(msg.chat_id)
+            chat_id = int(raw_chat_id)
         except ValueError:
             logger.error("Invalid chat_id: {}", msg.chat_id)
             return
         reply_to_message_id = msg.metadata.get("message_id")
-        message_thread_id = msg.metadata.get("message_thread_id")
         if message_thread_id is None and reply_to_message_id is not None:
             message_thread_id = self._message_threads.get((msg.chat_id, reply_to_message_id))
         thread_kwargs = {}
