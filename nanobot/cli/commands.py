@@ -522,6 +522,7 @@ def gateway(
     from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
+    from nanobot.config.loader import get_config_path, save_config
     from nanobot.config.paths import get_cron_dir
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
@@ -534,6 +535,7 @@ def gateway(
         logging.basicConfig(level=logging.DEBUG)
 
     config = _load_runtime_config(config, workspace)
+    save_config(config, get_config_path())
     _print_deprecated_memory_window_notice(config)
     port = port if port is not None else config.gateway.port
 
@@ -735,10 +737,12 @@ def agent(
 
     from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
+    from nanobot.config.loader import get_config_path, save_config
     from nanobot.config.paths import get_cron_dir
     from nanobot.cron.service import CronService
 
     config = _load_runtime_config(config, workspace)
+    save_config(config, get_config_path())
     _print_deprecated_memory_window_notice(config)
     sync_workspace_templates(config.workspace_path)
 
