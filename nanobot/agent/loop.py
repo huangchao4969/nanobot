@@ -10,6 +10,7 @@ import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from datetime import datetime
 
 from loguru import logger
 
@@ -28,6 +29,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
+from nanobot.config.loader import load_config
 
 if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig, InputLimitsConfig, WebSearchConfig
@@ -206,6 +208,7 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        session: Session | None = None
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop."""
         messages = initial_messages
@@ -455,14 +458,25 @@ class AgentLoop:
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
 
+        config = load_config()
+        speechConfig = config.speech or {}
+
+        userMessageToModel = msg.content
+
+        if speechConfig.enabled and (speechConfig.always_answer_with_audio or msg.metadata.get("wasAudio")):
+            userMessageToModel = "[AUDIO ANSWER]\n\n"+userMessageToModel
+
         history = session.get_history(max_messages=0)
         initial_messages = self.context.build_messages(
             history=history,
-            current_message=msg.content,
+            current_message=userMessageToModel,
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
         )
 
+        self._save_turn(session, initial_messages, 1 + len(history))
+        self.sessions.save(session)
+        
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
@@ -472,24 +486,41 @@ class AgentLoop:
             ))
 
         final_content, _, all_msgs = await self._run_agent_loop(
-            initial_messages, on_progress=on_progress or _bus_progress,
+            initial_messages, on_progress=on_progress or _bus_progress, session=session
         )
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history))
+        self._save_turn(session, all_msgs, 2 + len(history))
         self.sessions.save(session)
         self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
 
+        sendMessageAsText = True
+        if speechConfig.enabled and final_content and (speechConfig.always_answer_with_audio or msg.metadata.get("wasAudio")):
+            from nanobot.providers.speech import EdgeTextToSpeechProvider
+            tts = EdgeTextToSpeechProvider(voice=speechConfig.voice, rate=speechConfig.rate)
+
+            audioFilePath = f"tts_{msg.session_key.replace(':', '_')}_{int(datetime.now().timestamp() * 1000)}.ogg"
+            audio_path = Path.home() / ".nanobot" / "media" / audioFilePath
+            result = await tts.synthesize(final_content, audio_path)
+            if result:
+                msg.metadata["audioFilePath"] = str(result)
+
+                if not speechConfig.send_transcription:
+                    sendMessageAsText = False
+
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
         return OutboundMessage(
-            channel=msg.channel, chat_id=msg.chat_id, content=final_content,
-            metadata=msg.metadata or {},
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=final_content if sendMessageAsText else "[empty message]",
+            metadata=msg.metadata or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
+            media=[msg.metadata["audioFilePath"]] if msg.metadata.get("audioFilePath") else [],
         )
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:

@@ -787,7 +787,10 @@ class TelegramChannel(BaseChannel):
             chat_id=str_chat_id,
             content=content,
             media=media_paths,
-            metadata=metadata,
+            metadata={
+                **metadata,
+                "wasAudio": any(isinstance(m, str) and m.startswith("[transcription: ") for m in current_media_parts)
+            },
             session_key=session_key,
         )
 
