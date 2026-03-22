@@ -358,6 +358,10 @@ class TelegramChannel(BaseChannel):
             parts = raw_chat_id.split(":topic:")
             raw_chat_id = parts[0]
             message_thread_id = int(parts[1])
+        elif "_" in raw_chat_id:
+            parts = raw_chat_id.split("_")
+            raw_chat_id = parts[0]
+            message_thread_id = int(parts[1])
 
         try:
             chat_id = int(raw_chat_id)
