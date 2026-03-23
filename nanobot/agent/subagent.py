@@ -103,6 +103,10 @@ class SubagentManager:
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
+                tirith_enabled=self.exec_config.tirith.enabled,
+                tirith_bin=self.exec_config.tirith.bin,
+                tirith_timeout=self.exec_config.tirith.timeout,
+                tirith_fail_open=self.exec_config.tirith.fail_open,
             ))
             tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
             tools.register(WebFetchTool(proxy=self.web_proxy))

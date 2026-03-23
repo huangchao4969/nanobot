@@ -1,12 +1,15 @@
 """Shell execution tool."""
 
 import asyncio
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
+
+logger = logging.getLogger(__name__)
 
 
 class ExecTool(Tool):
@@ -20,9 +23,17 @@ class ExecTool(Tool):
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
+        tirith_enabled: bool = True,
+        tirith_bin: str = "tirith",
+        tirith_timeout: int = 5,
+        tirith_fail_open: bool = True,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
+        self.tirith_enabled = tirith_enabled
+        self.tirith_bin = tirith_bin
+        self.tirith_timeout = tirith_timeout
+        self.tirith_fail_open = tirith_fail_open
         self.deny_patterns = deny_patterns or [
             r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",              # del /f, del /q
@@ -83,6 +94,11 @@ class ExecTool(Tool):
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
+
+        # Tirith content-level security gate (after cheap regex guards)
+        tirith_error = await self._tirith_guard(command)
+        if tirith_error:
+            return tirith_error
 
         effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
 
@@ -181,3 +197,36 @@ class ExecTool(Tool):
         posix_paths = re.findall(r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command) # POSIX: /absolute only
         home_paths = re.findall(r"(?:^|[\s|>'\"])(~[^\s\"'>;|<]*)", command) # POSIX/Windows home shortcut: ~
         return win_paths + posix_paths + home_paths
+
+    async def _tirith_guard(self, command: str) -> str | None:
+        """Scan command with tirith for content-level threats.
+
+        Runs after _guard_command() (cheap regex guards). Detects homograph
+        URLs, pipe-to-shell patterns, terminal injection, and more.
+        Fail-open if tirith is not installed. Uses instance config fields
+        passed via __init__ (wired from exec_config.tirith at construction).
+        """
+        try:
+            from nanobot.agent.tools.tirith_security import check_security
+        except ImportError:
+            return None
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, lambda: check_security(
+                command, context="exec",
+                enabled=self.tirith_enabled, tirith_bin=self.tirith_bin,
+                timeout=self.tirith_timeout, fail_open=self.tirith_fail_open,
+            )
+        )
+
+        if result["action"] == "block":
+            summary = result.get("summary") or "security issue detected"
+            return f"Error: Command blocked by Tirith security scan ({summary})"
+
+        if result["action"] == "warn":
+            warnings = [f.get("title", "") for f in result.get("findings", [])]
+            msg = "; ".join(filter(None, warnings)) or result.get("summary", "security warning")
+            logger.warning("Tirith: %s", msg)
+
+        return None
