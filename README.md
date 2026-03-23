@@ -1354,6 +1354,8 @@ MCP tools are automatically discovered and registered on startup. The LLM can us
 | `tools.restrictToWorkspace` | `false` | When `true`, restricts **all** agent tools (shell, file read/write/edit, list) to the workspace directory. Prevents path traversal and out-of-scope access. |
 | `tools.exec.enable` | `true` | When `false`, the shell `exec` tool is not registered at all. Use this to completely disable shell command execution. |
 | `tools.exec.pathAppend` | `""` | Extra directories to append to `PATH` when running shell commands (e.g. `/usr/sbin` for `ufw`). |
+| `tools.exec.tirith.enabled` | `true` | Enable [Tirith](https://github.com/sheeki03/tirith) pre-exec security scanning for homograph URLs, pipe-to-shell, terminal injection, and more. Auto-installed on first use. |
+| `tools.exec.tirith.failOpen` | `true` | When `true`, allow execution if Tirith is unavailable or errors. |
 | `channels.*.allowFrom` | `[]` (deny all) | Whitelist of user IDs. Empty denies all; use `["*"]` to allow everyone. |
 
 
