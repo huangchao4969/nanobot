@@ -56,6 +56,7 @@ class AgentLoop:
         bus: MessageBus,
         provider: LLMProvider,
         workspace: Path,
+        projects: Path | None = None,
         model: str | None = None,
         max_iterations: int = 40,
         context_window_tokens: int = 65_536,
@@ -75,6 +76,7 @@ class AgentLoop:
         self.channels_config = channels_config
         self.provider = provider
         self.workspace = workspace
+        self.projects = projects or workspace
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
         self.context_window_tokens = context_window_tokens
@@ -90,9 +92,11 @@ class AgentLoop:
         self.context = ContextBuilder(workspace, input_limits=self.input_limits)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
+
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
+            projects=projects,
             bus=bus,
             model=self.model,
             web_search_config=self.web_search_config,
@@ -100,6 +104,8 @@ class AgentLoop:
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
         )
+
+        self._register_default_tools(self.tools)
 
         self._running = False
         self._mcp_servers = mcp_servers or {}
@@ -109,6 +115,7 @@ class AgentLoop:
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
         self._processing_lock = asyncio.Lock()
+
         self.memory_consolidator = MemoryConsolidator(
             workspace=workspace,
             provider=provider,
@@ -118,28 +125,31 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
         )
-        self._register_default_tools()
 
-    def _register_default_tools(self) -> None:
-        """Register the default set of tools."""
+    def _register_filesystem_tools(self, tools, working_dir) -> None:
+        """Register filesystem tools for a session-specific working directory."""
         allowed_dir = self.workspace if self.restrict_to_workspace else None
-        extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
-        self.tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read))
+        extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else []
+        extra = [self.workspace] if working_dir != self.workspace else []
+        tools.register(ReadFileTool(workspace=working_dir, allowed_dir=allowed_dir,extra_allowed_dirs=extra_read+extra))
         for cls in (WriteFileTool, EditFileTool, ListDirTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(cls(workspace=working_dir, allowed_dir=allowed_dir,extra_allowed_dirs=extra))
         if self.exec_config.enable:
-            self.tools.register(ExecTool(
-                working_dir=str(self.workspace),
+            tools.register(ExecTool(
+                working_dir=str(working_dir),
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
             ))
-        self.tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
-        self.tools.register(WebFetchTool(proxy=self.web_proxy))
-        self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
-        self.tools.register(SpawnTool(manager=self.subagents))
+
+    def _register_default_tools(self, tools) -> None:
+        """Register the default set of tools."""
+        tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
+        tools.register(WebFetchTool(proxy=self.web_proxy))
+        tools.register(MessageTool(send_callback=self.bus.publish_outbound))
+        tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
-            self.tools.register(CronTool(self.cron_service))
+            tools.register(CronTool(self.cron_service))
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -163,12 +173,12 @@ class AgentLoop:
         finally:
             self._mcp_connecting = False
 
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None, project: str | None = None) -> None:
         """Update context for all tools that need routing info."""
         for name in ("message", "spawn", "cron"):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
-                    tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+                    tool.set_context(channel, chat_id, *([message_id] if name == "message" else []), *([project] if name == "spawn" else []))
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -234,6 +244,7 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        session_tools: ToolRegistry | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop."""
         messages = initial_messages
@@ -245,6 +256,8 @@ class AgentLoop:
             iteration += 1
 
             tool_defs = self.tools.get_definitions()
+            if session_tools is not None:
+                tool_defs.extend(session_tools.get_definitions())
 
             response = await self.provider.chat_with_retry(
                 messages=messages,
@@ -277,6 +290,7 @@ class AgentLoop:
                 )
 
                 for tc in response.tool_calls:
+                    tools = session_tools if (session_tools and session_tools.has(tc.name)) else self.tools
                     tools_used.append(tc.name)
                     args_str = json.dumps(tc.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tc.name, args_str[:200])
@@ -286,7 +300,7 @@ class AgentLoop:
                 # return_exceptions=True ensures all results are collected
                 # even if one tool is cancelled or raises BaseException.
                 results = await asyncio.gather(*(
-                    self.tools.execute(tc.name, tc.arguments)
+                    tools.execute(tc.name, tc.arguments)
                     for tc in response.tool_calls
                 ), return_exceptions=True)
 
@@ -447,7 +461,8 @@ class AgentLoop:
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
             # Subagent results should be assistant role, other system messages use user role
-            current_role = "assistant" if msg.sender_id == "subagent" else "user"
+            # Also prevents two assistant messages in a row
+            current_role = "assistant" if msg.sender_id == "subagent" and ( not history or history[-1]['role'] != "assistant" ) else "user"
             messages = self.context.build_messages(
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
@@ -466,6 +481,15 @@ class AgentLoop:
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
 
+        project = msg.metadata.get('project', session.metadata.get('project', None))
+        session_dir = self.projects / project if self.projects and project else self.workspace
+        if msg.content == '':
+            if project: session_dir.mkdir(exist_ok=True)
+            return None
+
+        session_tools = ToolRegistry()
+        self._register_filesystem_tools(session_tools, session_dir)
+
         # Slash commands
         cmd = msg.content.strip().lower()
         if cmd == "/new":
@@ -481,6 +505,13 @@ class AgentLoop:
                                   content="New session started.")
         if cmd == "/status":
             return self._status_response(msg, session)
+        elif cmd.startswith('/project '):
+            project = cmd[cmd.find(' ')+1:]
+            session.metadata['project'] = project
+            if self.projects: (self.projects / project).mkdir(exist_ok=True)
+            self.sessions.save(session)
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
+                                  content=f"Project changed to {project}.")
         if cmd == "/help":
             lines = [
                 "🐈 nanobot commands:",
@@ -488,6 +519,7 @@ class AgentLoop:
                 "/stop — Stop the current task",
                 "/restart — Restart the bot",
                 "/status — Show bot status",
+                "/project <name> - Switch to another project",
                 "/help — Show available commands",
             ]
             return OutboundMessage(
@@ -498,7 +530,7 @@ class AgentLoop:
             )
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
-        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"), project)
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
@@ -521,6 +553,7 @@ class AgentLoop:
 
         final_content, _, all_msgs = await self._run_agent_loop(
             initial_messages, on_progress=on_progress or _bus_progress,
+            session_tools = session_tools,
         )
 
         if final_content is None:
