@@ -119,12 +119,22 @@ class WebToolsConfig(Base):
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
 
 
+class TirithConfig(Base):
+    """Tirith security scanning configuration."""
+
+    enabled: bool = True
+    bin: str = "tirith"
+    timeout: int = 5
+    fail_open: bool = True
+
+
 class ExecToolConfig(Base):
     """Shell exec tool configuration."""
 
     enable: bool = True
     timeout: int = 60
     path_append: str = ""
+    tirith: TirithConfig = Field(default_factory=TirithConfig)
 
 
 class InputLimitsConfig(Base):
