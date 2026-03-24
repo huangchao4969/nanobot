@@ -142,7 +142,7 @@ class TestSubagentCancellation:
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
-        mgr = SubagentManager(provider=provider, workspace=MagicMock(), bus=bus)
+        mgr = SubagentManager(provider=provider, workspace=MagicMock(), bus=bus, session_manager=MagicMock())
 
         cancelled = asyncio.Event()
 
@@ -170,7 +170,7 @@ class TestSubagentCancellation:
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
-        mgr = SubagentManager(provider=provider, workspace=MagicMock(), bus=bus)
+        mgr = SubagentManager(provider=provider, workspace=MagicMock(), bus=bus, session_manager=MagicMock())
         assert await mgr.cancel_by_session("nonexistent") == 0
 
     @pytest.mark.asyncio
@@ -198,15 +198,17 @@ class TestSubagentCancellation:
                 )
             captured_second_call[:] = messages
             return LLMResponse(content="done", tool_calls=[])
+        from nanobot.session.manager import Session
         provider.chat_with_retry = scripted_chat_with_retry
-        mgr = SubagentManager(provider=provider, workspace=tmp_path, bus=bus)
+        mgr = SubagentManager(provider=provider, workspace=tmp_path, bus=bus, session_manager=MagicMock())
 
         async def fake_execute(self, name, arguments):
             return "tool result"
 
         monkeypatch.setattr("nanobot.agent.tools.registry.ToolRegistry.execute", fake_execute)
 
-        await mgr._run_subagent("sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"})
+        session = Session(key="test:c1")
+        await mgr._run_subagent("sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"}, session=session)
 
         assistant_messages = [
             msg for msg in captured_second_call

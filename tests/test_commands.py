@@ -58,11 +58,11 @@ def mock_paths():
             shutil.rmtree(base_dir)
 
 
-def test_onboard_fresh_install(mock_paths):
-    """No existing config — should create from scratch."""
+def test_onboard_fresh_install_non_interactive(mock_paths):
+    """No existing config — should create from scratch in non-interactive mode."""
     config_file, workspace_dir, mock_ws = mock_paths
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard", "--non-interactive"])
 
     assert result.exit_code == 0
     assert "Created config" in result.stdout
@@ -75,12 +75,12 @@ def test_onboard_fresh_install(mock_paths):
     assert mock_ws.call_args.args == (expected_workspace,)
 
 
-def test_onboard_existing_config_refresh(mock_paths):
+def test_onboard_existing_config_refresh_non_interactive(mock_paths):
     """Config exists, user declines overwrite — should refresh (load-merge-save)."""
     config_file, workspace_dir, _ = mock_paths
     config_file.write_text('{"existing": true}')
 
-    result = runner.invoke(app, ["onboard"], input="n\n")
+    result = runner.invoke(app, ["onboard", "--non-interactive"], input="n\n")
 
     assert result.exit_code == 0
     assert "Config already exists" in result.stdout
@@ -89,12 +89,12 @@ def test_onboard_existing_config_refresh(mock_paths):
     assert (workspace_dir / "AGENTS.md").exists()
 
 
-def test_onboard_existing_config_overwrite(mock_paths):
+def test_onboard_existing_config_overwrite_non_interactive(mock_paths):
     """Config exists, user confirms overwrite — should reset to defaults."""
     config_file, workspace_dir, _ = mock_paths
     config_file.write_text('{"existing": true}')
 
-    result = runner.invoke(app, ["onboard"], input="y\n")
+    result = runner.invoke(app, ["onboard", "--non-interactive"], input="y\n")
 
     assert result.exit_code == 0
     assert "Config already exists" in result.stdout
@@ -102,13 +102,13 @@ def test_onboard_existing_config_overwrite(mock_paths):
     assert workspace_dir.exists()
 
 
-def test_onboard_existing_workspace_safe_create(mock_paths):
+def test_onboard_existing_workspace_safe_create_non_interactive(mock_paths):
     """Workspace exists — should not recreate, but still add missing templates."""
     config_file, workspace_dir, _ = mock_paths
     workspace_dir.mkdir(parents=True)
     config_file.write_text("{}")
 
-    result = runner.invoke(app, ["onboard"], input="n\n")
+    result = runner.invoke(app, ["onboard", "--non-interactive"], input="n\n")
 
     assert result.exit_code == 0
     assert "Created workspace" not in result.stdout
@@ -161,7 +161,7 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
 
     result = runner.invoke(
         app,
-        ["onboard", "--config", str(config_path), "--workspace", str(workspace_path)],
+        ["onboard", "--config", str(config_path), "--workspace", str(workspace_path), "--non-interactive"],
     )
 
     assert result.exit_code == 0
