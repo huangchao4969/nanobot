@@ -199,6 +199,7 @@ class AgentLoop:
         on_progress: Callable[..., Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        on_tool_result: Callable[[str, str], Awaitable[None]] | None = None,
         *,
         channel: str = "cli",
         chat_id: str = "direct",
@@ -288,6 +289,9 @@ class AgentLoop:
                 # Re-bind tool context right before execution so that
                 # concurrent sessions don't clobber each other's routing.
                 self._set_tool_context(channel, chat_id, message_id)
+                if exec_tool := self.tools.get("exec"):
+                    if hasattr(exec_tool, "set_progress_callback"):
+                        exec_tool.set_progress_callback(on_progress)
 
                 # Execute all tool calls concurrently — the LLM batches
                 # independent calls in a single response on purpose.
@@ -301,6 +305,8 @@ class AgentLoop:
                 for tool_call, result in zip(response.tool_calls, results):
                     if isinstance(result, BaseException):
                         result = f"Error: {type(result).__name__}: {result}"
+                    if on_tool_result:
+                        await on_tool_result(tool_call.name, str(result))
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -432,6 +438,7 @@ class AgentLoop:
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        on_tool_result: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         # System messages: parse origin from chat_id ("channel:chat_id")
@@ -444,7 +451,7 @@ class AgentLoop:
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
-            current_role = "assistant" if msg.sender_id == "subagent" else "user"
+            current_role = "user"
             messages = self.context.build_messages(
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
@@ -471,6 +478,9 @@ class AgentLoop:
         ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
         if result := await self.commands.dispatch(ctx):
             return result
+
+        if on_progress:
+            await on_progress("Thinking...", tool_hint=False)
 
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
@@ -500,6 +510,7 @@ class AgentLoop:
             on_progress=on_progress or _bus_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
+            on_tool_result=on_tool_result,
             channel=msg.channel, chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
         )
@@ -610,14 +621,17 @@ class AgentLoop:
         session_key: str = "cli:direct",
         channel: str = "cli",
         chat_id: str = "direct",
+        media: list[str] | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        on_tool_result: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a message directly and return the outbound payload."""
         await self._connect_mcp()
-        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
+        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content, media=media or [])
         return await self._process_message(
             msg, session_key=session_key, on_progress=on_progress,
             on_stream=on_stream, on_stream_end=on_stream_end,
+            on_tool_result=on_tool_result,
         )
