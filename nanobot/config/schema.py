@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -42,12 +42,44 @@ class AgentDefaults(Base):
     max_tool_iterations: int = 40
     context_budget_tokens: int = 0  # Max old-history tokens during tool iterations (0 = no trim)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
+    description: str | None = None
+
+    @property
+    def should_warn_deprecated_memory_window(self) -> bool:
+        """Return True when old memoryWindow is present without contextWindowTokens."""
+        return self.memory_window is not None and "context_window_tokens" not in self.model_fields_set
 
 
 class AgentsConfig(Base):
     """Agent configuration."""
 
-    defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
+
+    members: dict[str, AgentDefaults] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _collect_members(self):
+        extras = self.model_extra or {}
+        if "defaults" in extras:
+            self.members["defaults"] = AgentDefaults.model_validate(extras["defaults"])
+        for name, value in extras.items():
+            if name == "defaults":
+                continue
+            self.members[name] = AgentDefaults.model_validate(value)
+        return self
+
+    @property
+    def defaults(self) -> AgentDefaults:
+        if self.members:
+            return self.members[next(iter(self.members.keys()))]
+        return AgentDefaults()
+
+    @defaults.setter
+    def defaults(self, value: AgentDefaults) -> None:
+        if self.members:
+            first_key = next(iter(self.members.keys()))
+            self.members[first_key] = value
+            return
 
 
 class ProviderConfig(Base):

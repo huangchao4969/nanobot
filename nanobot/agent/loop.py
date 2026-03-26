@@ -68,6 +68,8 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        subagent_configs: dict | None = None,
+        provider_factory: Callable[[str], LLMProvider] | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig, InputLimitsConfig, WebSearchConfig
 
@@ -87,6 +89,8 @@ class AgentLoop:
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
+        self.subagent_configs = subagent_configs or {}
+        self.provider_factory = provider_factory
 
         self.context = ContextBuilder(workspace, input_limits=self.input_limits)
         self.sessions = session_manager or SessionManager(workspace)
@@ -100,6 +104,8 @@ class AgentLoop:
             web_proxy=web_proxy,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
+            subagent_configs=self.subagent_configs,
+            provider_factory=self.provider_factory,
         )
 
         self._running = False
@@ -327,7 +333,8 @@ class AgentLoop:
 
                 for tc in response.tool_calls:
                     tools_used.append(tc.name)
-                    args_str = json.dumps(tc.arguments, ensure_ascii=False)
+                    max_len = 60
+                    args_str = json.dumps({k: (v[:max_len-3]+"..." if isinstance(v,str) and len(v)>max_len else v) for k,v in tc.arguments.items()})
                     logger.info("Tool call: {}({})", tc.name, args_str[:200])
 
                 # Re-bind tool context right before execution so that
@@ -489,7 +496,7 @@ class AgentLoop:
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
-            current_role = "assistant" if msg.sender_id == "subagent" else "user"
+            current_role = "assistant" if msg.sender_id == "subagent" and ( not history or history[-1]['role'] != "assistant" ) else "user"
             messages = self.context.build_messages(
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
