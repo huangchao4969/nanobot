@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -12,6 +12,7 @@ class Base(BaseModel):
     """Base model that accepts both camelCase and snake_case keys."""
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
 
 class ChannelsConfig(Base):
     """Configuration for chat channels.
@@ -25,7 +26,9 @@ class ChannelsConfig(Base):
 
     send_progress: bool = True  # stream agent's text progress to the channel
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
-    send_max_retries: int = Field(default=3, ge=0, le=10)  # Max delivery attempts (initial send included)
+    send_max_retries: int = Field(
+        default=3, ge=0, le=10
+    )  # Max delivery attempts (initial send included)
 
 
 class AgentDefaults(Base):
@@ -45,9 +48,32 @@ class AgentDefaults(Base):
 
 
 class AgentsConfig(Base):
-    """Agent configuration."""
+    """Agent configuration.
 
+    Extra fields are parsed as additional named agent configs (e.g. tencent_server).
+    """
+
+    model_config = ConfigDict(extra="allow")
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+
+    def get_agent(self, name: str | None = None) -> AgentDefaults:
+        """Get agent config by name. None or 'defaults' returns the default agent."""
+        if not name or name == "defaults":
+            return self.defaults
+        extra = self.__pydantic_extra__ or {}
+        raw = extra.get(name)
+        if raw is None:
+            available = ["defaults"] + list(extra.keys())
+            raise ValueError(f"Agent '{name}' not found. Available: {available}")
+        if isinstance(raw, dict):
+            return AgentDefaults(**raw)
+        return raw
+
+    def list_agents(self) -> list[str]:
+        """List all available agent names."""
+        names = ["defaults"]
+        names.extend(self.__pydantic_extra__ or {})
+        return names
 
 
 class ProviderConfig(Base):
@@ -59,10 +85,18 @@ class ProviderConfig(Base):
 
 
 class ProvidersConfig(Base):
-    """Configuration for LLM providers."""
+    """Configuration for LLM providers.
+
+    Built-in providers are defined as typed fields below.
+    Custom provider entries (e.g. "tencent_server") are stored as extra fields.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
+    azure_openai: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # Azure OpenAI (model = deployment name)
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -80,11 +114,21 @@ class ProvidersConfig(Base):
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow (硅基流动)
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
-    volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine Coding Plan
-    byteplus: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus (VolcEngine international)
-    byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus Coding Plan
-    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # OpenAI Codex (OAuth)
-    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
+    volcengine_coding_plan: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # VolcEngine Coding Plan
+    byteplus: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # BytePlus (VolcEngine international)
+    byteplus_coding_plan: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # BytePlus Coding Plan
+    openai_codex: ProviderConfig = Field(
+        default_factory=ProviderConfig, exclude=True
+    )  # OpenAI Codex (OAuth)
+    github_copilot: ProviderConfig = Field(
+        default_factory=ProviderConfig, exclude=True
+    )  # Github Copilot (OAuth)
 
 
 class HeartbeatConfig(Base):
@@ -146,7 +190,10 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP/SSE: endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
-    enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
+    enabled_tools: list[str] = Field(
+        default_factory=lambda: ["*"]
+    )  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
+
 
 class ToolsConfig(Base):
     """Tools configuration."""
@@ -161,6 +208,8 @@ class ToolsConfig(Base):
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
+    _active_agent: str | None = PrivateAttr(default=None)
+
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
@@ -168,25 +217,47 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
 
     @property
+    def active_defaults(self) -> AgentDefaults:
+        """Get the currently active agent's defaults."""
+        return self.agents.get_agent(self._active_agent)
+
+    @property
     def workspace_path(self) -> Path:
         """Get expanded workspace path."""
-        return Path(self.agents.defaults.workspace).expanduser()
+        return Path(self.active_defaults.workspace).expanduser()
+
+    def _resolve_provider_attr(self, name: str) -> "ProviderConfig | None":
+        """Get a provider config by name, converting extra-field dicts to ProviderConfig."""
+        # Try exact name first, then snake_case conversion for camelCase names
+        for attr_name in (name, self._to_snake_case(name)):
+            val = getattr(self.providers, attr_name, None)
+            if val is not None:
+                if isinstance(val, ProviderConfig):
+                    return val
+                if isinstance(val, dict):
+                    return ProviderConfig(**val)
+        return None
+
+    @staticmethod
+    def _to_snake_case(name: str) -> str:
+        """Convert camelCase to snake_case."""
+        import re
+
+        s = re.sub(r"([A-Z])", r"_\1", name)
+        return s.lower().lstrip("_")
 
     def _match_provider(
         self, model: str | None = None
     ) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
-        from nanobot.providers.registry import PROVIDERS, find_by_name
+        from nanobot.providers.registry import PROVIDERS
 
-        forced = self.agents.defaults.provider
+        forced = self.active_defaults.provider
         if forced != "auto":
-            spec = find_by_name(forced)
-            if spec:
-                p = getattr(self.providers, spec.name, None)
-                return (p, spec.name) if p else (None, None)
-            return None, None
+            p = self._resolve_provider_attr(forced)
+            return (p, self._to_snake_case(forced)) if p else (None, None)
 
-        model_lower = (model or self.agents.defaults.model).lower()
+        model_lower = (model or self.active_defaults.model).lower()
         model_normalized = model_lower.replace("-", "_")
         model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
         normalized_prefix = model_prefix.replace("-", "_")

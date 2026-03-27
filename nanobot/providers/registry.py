@@ -81,7 +81,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         is_direct=True,
     ),
-
     # === Azure OpenAI (direct API calls with API version 2024-10-21) =====
     ProviderSpec(
         name="azure_openai",
@@ -131,7 +130,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="siliconflow",
         default_api_base="https://api.siliconflow.cn/v1",
     ),
-
     # VolcEngine (火山引擎): OpenAI-compatible gateway, pay-per-use models
     ProviderSpec(
         name="volcengine",
@@ -143,7 +141,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="volces",
         default_api_base="https://ark.cn-beijing.volces.com/api/v3",
     ),
-
     # VolcEngine Coding Plan (火山引擎 Coding Plan): same key as volcengine
     ProviderSpec(
         name="volcengine_coding_plan",
@@ -155,7 +152,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://ark.cn-beijing.volces.com/api/coding/v3",
         strip_model_prefix=True,
     ),
-
     # BytePlus: VolcEngine international, pay-per-use models
     ProviderSpec(
         name="byteplus",
@@ -168,7 +164,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://ark.ap-southeast.bytepluses.com/api/v3",
         strip_model_prefix=True,
     ),
-
     # BytePlus Coding Plan: same key as byteplus
     ProviderSpec(
         name="byteplus_coding_plan",
@@ -180,8 +175,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://ark.ap-southeast.bytepluses.com/api/coding/v3",
         strip_model_prefix=True,
     ),
-
-
     # === Standard providers (matched by model-name keywords) ===============
     # Anthropic: native Anthropic SDK
     ProviderSpec(

@@ -6,12 +6,11 @@ import platform
 from pathlib import Path
 from typing import Any
 
-from nanobot.utils.helpers import current_time_str
-
+from nanobot.agent.agents import AgentsLoader
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
 from nanobot.config.schema import InputLimitsConfig
-from nanobot.utils.helpers import build_assistant_message, detect_image_mime
+from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
 
 class ContextBuilder:
@@ -24,6 +23,7 @@ class ContextBuilder:
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
+        self.agents = AgentsLoader(workspace)
         self.input_limits = input_limits or InputLimitsConfig()
 
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
@@ -52,6 +52,14 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
 
 {skills_summary}""")
+
+        agents_summary = self.agents.build_agents_summary()
+        if agents_summary:
+            parts.append(f"""# Agents
+
+The following specialized agents are available. To use an agent, read its AGENT.md file with read_file to get its full instructions, then spawn a subagent with the custom system_prompt and allowed_tools from the AGENT.md.
+
+{agents_summary}""")
 
         return "\n\n---\n\n".join(parts)
 
@@ -161,8 +169,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         if extra_count:
             noun = "image" if extra_count == 1 else "images"
             notes.append(
-                f"[Skipped {extra_count} {noun}: "
-                f"only the first {max_images} images are included]"
+                f"[Skipped {extra_count} {noun}: only the first {max_images} images are included]"
             )
 
         for path in media[:max_images]:
@@ -196,25 +203,33 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         return images + [{"type": "text", "text": text_block}]
 
     def add_tool_result(
-        self, messages: list[dict[str, Any]],
-        tool_call_id: str, tool_name: str, result: str,
+        self,
+        messages: list[dict[str, Any]],
+        tool_call_id: str,
+        tool_name: str,
+        result: str,
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list."""
-        messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": result})
+        messages.append(
+            {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": result}
+        )
         return messages
 
     def add_assistant_message(
-        self, messages: list[dict[str, Any]],
+        self,
+        messages: list[dict[str, Any]],
         content: str | None,
         tool_calls: list[dict[str, Any]] | None = None,
         reasoning_content: str | None = None,
         thinking_blocks: list[dict] | None = None,
     ) -> list[dict[str, Any]]:
         """Add an assistant message to the message list."""
-        messages.append(build_assistant_message(
-            content,
-            tool_calls=tool_calls,
-            reasoning_content=reasoning_content,
-            thinking_blocks=thinking_blocks,
-        ))
+        messages.append(
+            build_assistant_message(
+                content,
+                tool_calls=tool_calls,
+                reasoning_content=reasoning_content,
+                thinking_blocks=thinking_blocks,
+            )
+        )
         return messages

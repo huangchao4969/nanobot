@@ -5,54 +5,53 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 import httpx
 from loguru import logger
 from pydantic import Field
 
-from pathlib import Path
-
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
-from flask import Flask, request
-
 
 # Try to import wecom_app_svr
 try:
-    from wecom_app_svr import WecomAppServer, RspTextMsg
+    from wecom_app_svr import RspTextMsg, WecomAppServer
+
     WECOM_APP_AVAILABLE = True
 except ImportError:
     WECOM_APP_AVAILABLE = False
     RspTextMsg = None
 
 if WECOM_APP_AVAILABLE:
+    import atexit
     import socket
     import sys
-    import atexit
+
     import werkzeug.serving
 
     _original_run_simple = werkzeug.serving.run_simple
     _active_sockets = []
 
     def _patched_run_simple(host, port, application, **kwargs):
-        threaded = kwargs.pop('threaded', False)
-        processes = kwargs.pop('processes', 1)
-        ssl_context = kwargs.pop('ssl_context', None)
+        threaded = kwargs.pop("threaded", False)
+        processes = kwargs.pop("processes", 1)
+        ssl_context = kwargs.pop("ssl_context", None)
 
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-            if hasattr(socket, 'SOCK_CLOEXEC'):
+            if hasattr(socket, "SOCK_CLOEXEC"):
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
 
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-            if hasattr(socket, 'SO_REUSEPORT'):
+            if hasattr(socket, "SO_REUSEPORT"):
                 try:
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
                 except (OSError, PermissionError) as e:
@@ -67,18 +66,22 @@ if WECOM_APP_AVAILABLE:
                 if sock in _active_sockets:
                     sock.close()
                     _active_sockets.remove(sock)
+
             atexit.register(cleanup)
 
             srv = werkzeug.serving.make_server(
-                host, port, application,
+                host,
+                port,
+                application,
                 threaded=threaded,
                 processes=processes,
                 ssl_context=ssl_context,
-                fd=sock.fileno())
+                fd=sock.fileno(),
+            )
             srv.log_startup()
             srv.serve_forever()
 
-        except Exception as e:
+        except Exception:
             if sock:
                 sock.close()
             raise
@@ -154,10 +157,12 @@ class WecomAppChannel(BaseChannel):
         self._server.set_message_handler(self._msg_handler)
         self._server.set_event_handler(self._event_handler)
 
-        logger.info("WeCom App server starting on {}:{}{}", 
-            self.config.host or "0.0.0.0", 
+        logger.info(
+            "WeCom App server starting on {}:{}{}",
+            self.config.host or "0.0.0.0",
             self.config.port,
-            self.config.path or "/wecom_app")
+            self.config.path or "/wecom_app",
+        )
 
         # Run Flask server in a separate thread to avoid blocking the event loop
         # This allows the dispatcher to continue processing outbound messages
@@ -181,8 +186,8 @@ class WecomAppChannel(BaseChannel):
             return self._create_default_response()
 
         try:
-            msg_type = getattr(req_msg, 'msg_type', 'unknown')
-            msg_id = getattr(req_msg, 'msg_id', f"{msg_type}_{getattr(req_msg, 'content', '')}")
+            msg_type = getattr(req_msg, "msg_type", "unknown")
+            msg_id = getattr(req_msg, "msg_id", f"{msg_type}_{getattr(req_msg, 'content', '')}")
 
             if msg_id in self._processed_message_ids:
                 return RspTextMsg()
@@ -191,8 +196,8 @@ class WecomAppChannel(BaseChannel):
             while len(self._processed_message_ids) > 1000:
                 self._processed_message_ids.pop(next(iter(self._processed_message_ids)))
 
-            sender_id = getattr(req_msg, 'from_user', 'unknown')
-            chat_id = getattr(req_msg, 'chat_id', sender_id)
+            sender_id = getattr(req_msg, "from_user", "unknown")
+            chat_id = getattr(req_msg, "chat_id", sender_id)
 
             logger.info(f"WeCom App: sender_id={sender_id}, chat_id={chat_id}, msg_type={msg_type}")
 
@@ -225,15 +230,15 @@ class WecomAppChannel(BaseChannel):
             return self._create_default_response()
 
         try:
-            event_type = getattr(req_msg, 'event_type', 'unknown')
-            sender_id = getattr(req_msg, 'from_user', 'unknown')
-            chat_id = getattr(req_msg, 'chat_id', sender_id)
+            event_type = getattr(req_msg, "event_type", "unknown")
+            sender_id = getattr(req_msg, "from_user", "unknown")
+            chat_id = getattr(req_msg, "chat_id", sender_id)
 
             logger.info(f"WeCom App event: event_type={event_type}, chat_id={chat_id}")
 
             self._chat_frames[chat_id] = req_msg
 
-            if event_type == 'add_to_chat':
+            if event_type == "add_to_chat":
                 content = self.config.welcome_message or "欢迎！我是您的 AI 助手。"
                 ret = RspTextMsg()
                 ret.content = content
@@ -258,17 +263,17 @@ class WecomAppChannel(BaseChannel):
     async def _handle_message_async(self, req_msg: Any) -> None:
         """Handle incoming message asynchronously."""
         try:
-            msg_type = getattr(req_msg, 'msg_type', 'unknown')
-            sender_id = getattr(req_msg, 'from_user', 'unknown')
-            chat_id = getattr(req_msg, 'chat_id', sender_id)
+            msg_type = getattr(req_msg, "msg_type", "unknown")
+            sender_id = getattr(req_msg, "from_user", "unknown")
+            chat_id = getattr(req_msg, "chat_id", sender_id)
 
             content = ""
             media = None
 
-            if msg_type == 'text':
-                content = getattr(req_msg, 'content', '')
-            elif msg_type == 'image':
-                media_id = getattr(req_msg, 'media_id', '')
+            if msg_type == "text":
+                content = getattr(req_msg, "content", "")
+            elif msg_type == "image":
+                media_id = getattr(req_msg, "media_id", "")
                 # Download image and save locally
                 file_path = await self._download_media(media_id, "image") if media_id else None
                 if file_path:
@@ -277,8 +282,8 @@ class WecomAppChannel(BaseChannel):
                 else:
                     content = "[image]"
                     media = None
-            elif msg_type == 'video':
-                media_id = getattr(req_msg, 'media_id', '')
+            elif msg_type == "video":
+                media_id = getattr(req_msg, "media_id", "")
                 # Download video and save locally
                 file_path = await self._download_media(media_id, "video") if media_id else None
                 if file_path:
@@ -287,8 +292,8 @@ class WecomAppChannel(BaseChannel):
                 else:
                     content = "[video]"
                     media = None
-            elif msg_type == 'voice':
-                media_id = getattr(req_msg, 'media_id', '')
+            elif msg_type == "voice":
+                media_id = getattr(req_msg, "media_id", "")
                 # Download voice and save locally
                 file_path = await self._download_media(media_id, "voice") if media_id else None
                 if file_path:
@@ -312,15 +317,14 @@ class WecomAppChannel(BaseChannel):
                 media=media,
                 metadata={
                     "msg_type": msg_type,
-                    "media_id": getattr(req_msg, 'media_id', ''),
-                }
+                    "media_id": getattr(req_msg, "media_id", ""),
+                },
             )
 
             logger.info("WeCom App message forwarded to bus")
 
         except Exception as e:
             logger.error("Error in async message handling: {}", e)
-
 
     async def _download_media(self, media_id: str, media_type: str) -> str | None:
         """Download media from WeCom API and save to local file."""
@@ -351,6 +355,7 @@ class WecomAppChannel(BaseChannel):
                 if "filename=" in content_disposition:
                     # Extract filename from content-disposition header
                     import re
+
                     match = re.search(r'filename="?([^";]+)"?', content_disposition)
                     if match:
                         filename = match.group(1)
@@ -360,7 +365,13 @@ class WecomAppChannel(BaseChannel):
                     filename = None
 
                 if not filename:
-                    ext = ".jpg" if media_type == "image" else ".mp4" if media_type == "video" else ".amr"
+                    ext = (
+                        ".jpg"
+                        if media_type == "image"
+                        else ".mp4"
+                        if media_type == "video"
+                        else ".amr"
+                    )
                     filename = f"{media_type}_{media_id[:16]}{ext}"
 
                 # Ensure media directory exists
@@ -386,8 +397,8 @@ class WecomAppChannel(BaseChannel):
             return self._access_token
 
         # Check if we have credentials
-        agent_id = getattr(self.config, 'agentid', None)
-        secret = getattr(self.config, 'secret', None)
+        agent_id = getattr(self.config, "agentid", None)
+        secret = getattr(self.config, "secret", None)
 
         if not agent_id:
             logger.warning("WeCom App agent_id not configured")
@@ -463,8 +474,8 @@ class WecomAppChannel(BaseChannel):
                 payload = {
                     "touser": user_id,
                     "msgtype": "text",
-                    "agentid": getattr(self.config, 'agentid', ''),
-                    "text": {"content": content}
+                    "agentid": getattr(self.config, "agentid", ""),
+                    "text": {"content": content},
                 }
 
                 resp = await client.post(url, json=payload)
@@ -490,8 +501,8 @@ class WecomAppChannel(BaseChannel):
                 return
 
             # Check if we have API credentials
-            agent_id = getattr(self.config, 'agentid', None)
-            secret = getattr(self.config, 'secret', None)
+            agent_id = getattr(self.config, "agentid", None)
+            secret = getattr(self.config, "secret", None)
 
             if agent_id and secret:
                 user_id = msg.chat_id
@@ -502,8 +513,7 @@ class WecomAppChannel(BaseChannel):
                     logger.warning("Failed to send WeCom App message to {}", msg.chat_id)
             else:
                 logger.warning(
-                    "WeCom App agent_id/secret not configured. "
-                    "Cannot send proactive messages."
+                    "WeCom App agent_id/secret not configured. Cannot send proactive messages."
                 )
 
         except Exception as e:
