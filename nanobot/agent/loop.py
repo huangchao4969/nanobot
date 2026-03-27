@@ -196,11 +196,18 @@ class AgentLoop:
             
             val = None
             if isinstance(args, dict):
-                # Iterate through all string values to find the first meaningful one
-                for v in args.values():
-                    if isinstance(v, str):
-                        val = v
+                # Prioritize specific keys for better hints
+                for key in ["command", "query", "task", "path", "url"]:
+                    if key in args and isinstance(args[key], str):
+                        val = args[key]
                         break
+                
+                # Fallback to the first string value
+                if val is None:
+                    for v in args.values():
+                        if isinstance(v, str):
+                            val = v
+                            break
                             
             if not isinstance(val, str):
                 return tc.name
