@@ -483,6 +483,9 @@ class TelegramChannel(BaseChannel):
             except Exception as e2:
                 logger.error("Error sending Telegram message: {}", e2)
                 raise
+    @staticmethod
+    def _is_not_modified_error(exc: Exception) -> bool:
+        return "message is not modified" in str(exc).lower()
 
     @staticmethod
     def _is_not_modified_error(exc: Exception) -> bool:
