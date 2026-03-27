@@ -313,13 +313,8 @@ class AgentLoop:
             try:
                 on_stream = on_stream_end = None
                 if msg.metadata.get("_wants_stream"):
-                    # Split one answer into distinct stream segments.
-                    stream_base_id = f"{msg.session_key}:{time.time_ns()}"
-                    stream_segment = 0
-
-                    def _current_stream_id() -> str:
-                        return f"{stream_base_id}:{stream_segment}"
-
+                    import uuid
+                    _stream_id = str(uuid.uuid4())
                     async def on_stream(delta: str) -> None:
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
@@ -327,7 +322,7 @@ class AgentLoop:
                             metadata={
                                 **dict(msg.metadata or {}),
                                 "_stream_delta": True,
-                                "_stream_id": _current_stream_id(),
+                                "_stream_id": _stream_id,
                             },
                         ))
 
@@ -340,7 +335,7 @@ class AgentLoop:
                                 **dict(msg.metadata or {}),
                                 "_stream_end": True,
                                 "_resuming": resuming,
-                                "_stream_id": _current_stream_id(),
+                                "_stream_id": _stream_id,
                             },
                         ))
                         stream_segment += 1
