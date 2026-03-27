@@ -6,12 +6,11 @@ import platform
 from pathlib import Path
 from typing import Any
 
-from nanobot.utils.helpers import current_time_str
-
+from nanobot.agent.hooks import HookEvent, HookRegistry, SkillsEnabledFilter, load_hooks_from_json
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
 from nanobot.config.schema import InputLimitsConfig
-from nanobot.utils.helpers import build_assistant_message, detect_image_mime
+from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
 
 class ContextBuilder:
@@ -19,14 +18,48 @@ class ContextBuilder:
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
+    _MAX_DYNAMIC_CONTEXT_CHARS = 4000
 
     def __init__(self, workspace: Path, input_limits: InputLimitsConfig | None = None):
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
         self.input_limits = input_limits or InputLimitsConfig()
+        self.hooks = HookRegistry()
+        self._init_hooks()
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
+    def _init_hooks(self) -> None:
+        """Initialize default hooks and load user-defined hooks."""
+        # Built-in hook: skill disable/enable
+        self.hooks.register(SkillsEnabledFilter(self.workspace))
+
+        # Load user-defined hooks from .nanobot/hooks.json
+        for hook in load_hooks_from_json(self.workspace):
+            self.hooks.register(hook)
+
+    def preload_hooks(self) -> None:
+        """Validate all hooks at startup to catch configuration errors early.
+
+        This method validates:
+        - JSON syntax in hooks.json
+        - Required fields presence
+        - Event name validity
+        - Regex matcher syntax
+        - Priority value types
+
+        Validation errors are logged but don't prevent startup.
+        """
+        from nanobot.agent.hooks import load_hooks_from_json
+
+        # Validate hooks configuration without loading
+        load_hooks_from_json(self.workspace, validate_only=True)
+
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
         parts = [self._get_identity()]
 
@@ -38,13 +71,13 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
-        always_skills = self.skills.get_always_skills()
+        always_skills = self._get_filtered_always_skills()
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        skills_summary = self.skills.build_skills_summary()
+        skills_summary = self._build_filtered_skills_summary()
         if skills_summary:
             parts.append(f"""# Skills
 
@@ -53,7 +86,46 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
+        dynamic = self._collect_prompt_injections(channel, chat_id)
+        if dynamic:
+            parts.append(dynamic)
+
         return "\n\n---\n\n".join(parts)
+
+    def _build_filtered_skills_summary(self) -> str:
+        """Build skills summary with PRE_BUILD_CONTEXT hook filtering."""
+        all_skills = self.skills.list_skills(filter_unavailable=False)
+        filtered = self._apply_skills_hooks(all_skills)
+
+        if not filtered:
+            return ""
+
+        return self.skills.build_skills_summary_from(filtered)
+
+    def _get_filtered_always_skills(self) -> list[str]:
+        """Get always-on skills, filtered by hooks (respects disabled skills)."""
+        always_skills = self.skills.get_always_skills()
+        if not always_skills:
+            return []
+        # Build skill dicts for hook filtering
+        skill_dicts = [{"name": name} for name in always_skills]
+        filtered = self._apply_skills_hooks(skill_dicts)
+        return [s["name"] for s in filtered]
+
+    def _apply_skills_hooks(self, skills: list[dict]) -> list[dict]:
+        """Apply PRE_BUILD_CONTEXT hooks to a skills list."""
+        result = self.hooks.emit(HookEvent.PRE_BUILD_CONTEXT, {"type": "skills", "data": skills})
+        return result.modified_data if result.modified_data is not None else skills
+
+    def _collect_prompt_injections(self, channel: str | None, chat_id: str | None) -> str:
+        """Collect dynamic prompt injections from hooks, wrapped in <dynamic_context>."""
+        raw = self.hooks.collect_prompt_injections(channel=channel, chat_id=chat_id)
+        if not raw:
+            return ""
+        combined = "\n\n".join(raw)
+        if len(combined) > self._MAX_DYNAMIC_CONTEXT_CHARS:
+            combined = combined[: self._MAX_DYNAMIC_CONTEXT_CHARS] + "\n... (truncated)"
+        return f"<dynamic_context>\n{combined}\n</dynamic_context>"
 
     def _get_identity(self) -> str:
         """Get the core identity section."""
@@ -142,7 +214,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel, chat_id=chat_id)},
             *history,
             {"role": current_role, "content": merged},
         ]
@@ -187,6 +259,9 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
                 continue
             b64 = base64.b64encode(raw).decode()
             images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+
+        note_text = "\n".join(notes).strip()
+        text_block = text if not note_text else (f"{note_text}\n\n{text}" if text else note_text)
 
         note_text = "\n".join(notes).strip()
         text_block = text if not note_text else (f"{note_text}\n\n{text}" if text else note_text)

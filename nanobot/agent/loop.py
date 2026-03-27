@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.agent.context import ContextBuilder
+from nanobot.agent.hooks import HookEvent
 from nanobot.agent.memory import MemoryConsolidator
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.cron import CronTool
@@ -325,27 +326,30 @@ class AgentLoop:
                     thinking_blocks=response.thinking_blocks,
                 )
 
-                for tc in response.tool_calls:
-                    tools_used.append(tc.name)
-                    args_str = json.dumps(tc.arguments, ensure_ascii=False)
-                    logger.info("Tool call: {}({})", tc.name, args_str[:200])
+                for tool_call in response.tool_calls:
+                    tools_used.append(tool_call.name)
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
 
-                # Re-bind tool context right before execution so that
-                # concurrent sessions don't clobber each other's routing.
-                self._set_tool_context(channel, chat_id, message_id)
+                    # PreToolUse hook — may block execution
+                    pre_result = self.context.hooks.emit(HookEvent.PRE_TOOL_USE, {
+                        "tool_name": tool_call.name,
+                        "tool_args": tool_call.arguments,
+                    })
+                    if not pre_result.proceed:
+                        result = f"Hook blocked: {pre_result.reason}"
+                    else:
+                        result = await self.tools.execute(tool_call.name, tool_call.arguments)
 
-                # Execute all tool calls concurrently — the LLM batches
-                # independent calls in a single response on purpose.
-                # return_exceptions=True ensures all results are collected
-                # even if one tool is cancelled or raises BaseException.
-                results = await asyncio.gather(*(
-                    self.tools.execute(tc.name, tc.arguments)
-                    for tc in response.tool_calls
-                ), return_exceptions=True)
+                        # PostToolUse hook
+                        self.context.hooks.emit(HookEvent.POST_TOOL_USE, {
+                            "tool_name": tool_call.name,
+                            "tool_args": tool_call.arguments,
+                            "result": result,
+                        })
 
-                for tool_call, result in zip(response.tool_calls, results):
-                    if isinstance(result, BaseException):
-                        result = f"Error: {type(result).__name__}: {result}"
+
+
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -379,6 +383,11 @@ class AgentLoop:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+
+        # Preload and validate hooks configuration at startup
+        logger.debug("Validating hooks configuration...")
+        self.context.preload_hooks()
+
         logger.info("Agent loop started")
 
         while self._running:
@@ -467,6 +476,7 @@ class AgentLoop:
 
     def stop(self) -> None:
         """Stop the agent loop."""
+        self.context.hooks.emit(HookEvent.STOP, {})
         self._running = False
         logger.info("Agent loop stopping")
 
@@ -523,6 +533,13 @@ class AgentLoop:
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
+
+        # SessionStart hook
+        self.context.hooks.emit(HookEvent.SESSION_START, {
+            "session_key": key,
+            "channel": msg.channel,
+            "chat_id": msg.chat_id,
+        })
 
         history = session.get_history(max_messages=0)
         initial_messages = self.context.build_messages(
