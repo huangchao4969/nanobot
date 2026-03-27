@@ -485,7 +485,8 @@ class TelegramChannel(BaseChannel):
                 raise
     @staticmethod
     def _is_not_modified_error(exc: Exception) -> bool:
-        return "message is not modified" in str(exc).lower()
+        err_str = str(exc).lower()
+        return "message is not modified" in err_str or "exactly the same" in err_str
 
     @staticmethod
     def _is_not_modified_error(exc: Exception) -> bool:
