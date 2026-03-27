@@ -325,6 +325,7 @@ class AgentLoop:
                             channel=msg.channel, chat_id=msg.chat_id,
                             content=delta,
                             metadata={
+                                **dict(msg.metadata or {}),
                                 "_stream_delta": True,
                                 "_stream_id": _current_stream_id(),
                             },
@@ -336,6 +337,7 @@ class AgentLoop:
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="",
                             metadata={
+                                **dict(msg.metadata or {}),
                                 "_stream_end": True,
                                 "_resuming": resuming,
                                 "_stream_id": _current_stream_id(),
