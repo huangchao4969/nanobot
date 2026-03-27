@@ -372,6 +372,11 @@ class TelegramChannel(BaseChannel):
             logger.error("Invalid chat_id: {}", msg.chat_id)
             return
         reply_to_message_id = msg.metadata.get("message_id")
+        if reply_to_message_id is not None:
+            try:
+                reply_to_message_id = int(reply_to_message_id)
+            except ValueError:
+                pass
         message_thread_id = msg.metadata.get("message_thread_id")
         if message_thread_id is None and reply_to_message_id is not None:
             message_thread_id = self._message_threads.get((msg.chat_id, reply_to_message_id))
@@ -541,6 +546,11 @@ class TelegramChannel(BaseChannel):
         now = time.monotonic()
         if buf.message_id is None:
             reply_to_message_id = meta.get("message_id")
+            if reply_to_message_id is not None:
+                try:
+                    reply_to_message_id = int(reply_to_message_id)
+                except ValueError:
+                    pass
             message_thread_id = meta.get("message_thread_id")
             if message_thread_id is None and reply_to_message_id is not None:
                 message_thread_id = self._message_threads.get((chat_id, reply_to_message_id))
