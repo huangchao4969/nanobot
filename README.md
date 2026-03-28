@@ -258,6 +258,7 @@ Connect nanobot to your favorite chat platform. Want to build your own? See the 
 | **Matrix** | Homeserver URL + Access token |
 | **Email** | IMAP/SMTP credentials |
 | **QQ** | App ID + App Secret |
+| **NapCat** | Websocket URL + Token|
 | **Wecom** | Bot ID + Bot Secret |
 | **Mochat** | Claw token (auto-setup available) |
 
@@ -604,6 +605,64 @@ nanobot gateway
 ```
 
 Now send a message to the bot from QQ — it should respond!
+
+</details>
+
+<details>
+<summary><b>NapCat (QQ 支持群聊)</b></summary>
+
+Uses **[NapCatQQ](https://github.com/NapNeko/NapCatQQ) OneBot 11 forward WebSocket**.
+
+**1. Set up NapCatQQ**
+
+- Deploy NapCatQQ and login your QQ bot (alt) account. Recommendation: follow the [official docker tutorial](https://github.com/NapNeko/NapCat-Docker).
+- In the webui, follow "网络配置" -> "新建" -> "Websocket 服务器" to create a forward websocket server.
+- Copy the forward websocket server's token.
+- (Optional) In the webui, follow "系统配置" -> "登陆配置" -> "快速登录QQ" to automatically login after restarts.
+
+**2. Configure**
+
+> - `wsUrl`: NapCat forward WebSocket URL. Default is `ws://127.0.0.1:3001/`.
+> - `accessToken`: Set this to the forward websocket server's token.
+> - `allowFrom`: Add QQ user IDs (string). Use `["*"]` to allow all users.
+> - `groupPolicy`: `"mention"` (default — respond only when @mentioned in groups), `"open"` (respond to all allowed group messages). Private chats always respond.
+> - `groupOverrides`: Per-group policy overrides.
+> - `handleNoticeEvents`: Whether respond when new group member joins.
+> - `messageDebounceEnabled`: Whether combine multiple messages sent together.
+> - `messageDebounceSeconds`: Maximum seconds gap between two messages to be combined.
+> - `messageDebounceMaxMessages`: Maximum number of messages to combine together.
+
+```json
+{
+  "channels": {
+    "napcat": {
+      "enabled": true,
+      "wsUrl": "ws://127.0.0.1:3001/",
+      "accessToken": "",
+      "allowFrom": ["*"],
+      "groupPolicy": "mention",
+      "groupOverrides": {
+        "12345678": {
+          "groupPolicy": "open"
+        }
+      },
+      "reconnectDelayS": 5.0,
+      "handleNoticeEvents": true,
+      "messageDebounceEnabled": true,
+      "messageDebounceSeconds": 5.0,
+      "messageDebounceMaxMessages": 5
+    }
+  }
+}
+```
+
+**3. Run**
+
+```bash
+nanobot gateway
+```
+
+Now message the logged-in QQ account through NapCat.
 
 </details>
 
