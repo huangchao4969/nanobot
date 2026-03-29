@@ -372,6 +372,11 @@ class TelegramChannel(BaseChannel):
             logger.error("Invalid chat_id: {}", msg.chat_id)
             return
         reply_to_message_id = msg.metadata.get("message_id")
+        if reply_to_message_id is not None:
+            try:
+                reply_to_message_id = int(reply_to_message_id)
+            except ValueError:
+                pass
         message_thread_id = msg.metadata.get("message_thread_id")
         if message_thread_id is None and reply_to_message_id is not None:
             message_thread_id = self._message_threads.get((msg.chat_id, reply_to_message_id))
@@ -478,6 +483,10 @@ class TelegramChannel(BaseChannel):
             except Exception as e2:
                 logger.error("Error sending Telegram message: {}", e2)
                 raise
+    @staticmethod
+    def _is_not_modified_error(exc: Exception) -> bool:
+        err_str = str(exc).lower()
+        return "message is not modified" in err_str or "exactly the same" in err_str
 
     @staticmethod
     def _is_not_modified_error(exc: Exception) -> bool:
@@ -540,10 +549,33 @@ class TelegramChannel(BaseChannel):
 
         now = time.monotonic()
         if buf.message_id is None:
+            reply_to_message_id = meta.get("message_id")
+            if reply_to_message_id is not None:
+                try:
+                    reply_to_message_id = int(reply_to_message_id)
+                except ValueError:
+                    pass
+            message_thread_id = meta.get("message_thread_id")
+            if message_thread_id is None and reply_to_message_id is not None:
+                message_thread_id = self._message_threads.get((chat_id, reply_to_message_id))
+            thread_kwargs = {}
+            if message_thread_id is not None:
+                thread_kwargs["message_thread_id"] = message_thread_id
+
+            reply_params = None
+            if self.config.reply_to_message and reply_to_message_id:
+                from telegram import ReplyParameters
+                reply_params = ReplyParameters(
+                    message_id=reply_to_message_id,
+                    allow_sending_without_reply=True
+                )
+
             try:
                 sent = await self._call_with_retry(
                     self._app.bot.send_message,
                     chat_id=int_chat_id, text=buf.text,
+                    reply_parameters=reply_params,
+                    **thread_kwargs,
                 )
                 buf.message_id = sent.message_id
                 buf.last_edit = now
