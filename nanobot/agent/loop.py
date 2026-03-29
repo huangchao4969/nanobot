@@ -327,7 +327,6 @@ class AgentLoop:
                         ))
 
                     async def on_stream_end(*, resuming: bool = False) -> None:
-                        nonlocal stream_segment
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="",
@@ -338,7 +337,6 @@ class AgentLoop:
                                 "_stream_id": _stream_id,
                             },
                         ))
-                        stream_segment += 1
 
                 response = await self._process_message(
                     msg, on_stream=on_stream, on_stream_end=on_stream_end,
