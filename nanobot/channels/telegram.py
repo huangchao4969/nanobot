@@ -430,8 +430,15 @@ class TelegramChannel(BaseChannel):
 
         # Send text content
         if msg.content and msg.content != "[empty message]":
+            disable_notification = bool(msg.metadata.get("_tool_hint"))
             for chunk in split_message(msg.content, TELEGRAM_MAX_MESSAGE_LEN):
-                await self._send_text(chat_id, chunk, reply_params, thread_kwargs)
+                await self._send_text(
+                    chat_id,
+                    chunk,
+                    reply_params,
+                    thread_kwargs,
+                    disable_notification=disable_notification,
+                )
 
     async def _call_with_retry(self, fn, *args, **kwargs):
         """Call an async Telegram API function with retry on pool/network timeout."""
