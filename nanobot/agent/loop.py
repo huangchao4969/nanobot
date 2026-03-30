@@ -59,6 +59,7 @@ class _LoopHook(AgentHook):
         channel: str = "cli",
         chat_id: str = "direct",
         message_id: str | None = None,
+        interruption_checker: InterruptionChecker | None = None,
     ) -> None:
         self._loop = agent_loop
         self._on_progress = on_progress
@@ -67,6 +68,7 @@ class _LoopHook(AgentHook):
         self._channel = channel
         self._chat_id = chat_id
         self._message_id = message_id
+        self._interruption_checker = interruption_checker
         self._stream_buf = ""
 
     def wants_streaming(self) -> bool:
@@ -86,6 +88,20 @@ class _LoopHook(AgentHook):
         if self._on_stream_end:
             await self._on_stream_end(resuming=resuming)
         self._stream_buf = ""
+
+    async def before_iteration(self, context: AgentHookContext) -> None:
+        if not self._interruption_checker:
+            return
+        pending = self._interruption_checker.drain_all()
+        if pending:
+            combined = "\n\n---\n\n".join(m.content for m in pending)
+            injection = (
+                "[The user just sent a new message while you were working. "
+                "Read it and decide: continue current work, switch to the "
+                "new request, or address both.]\n\n" + combined
+            )
+            context.messages.append({"role": "user", "content": injection})
+            logger.info("Steering: injected {} interruption(s) before LLM call", len(pending))
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         if self._on_progress:
@@ -360,33 +376,13 @@ class AgentLoop:
             channel=channel,
             chat_id=chat_id,
             message_id=message_id,
+            interruption_checker=interruption_checker,
         )
         hook: AgentHook = (
             _LoopHookChain(loop_hook, self._extra_hooks)
             if self._extra_hooks
             else loop_hook
         )
-
-            async def after_iteration(self, context: AgentHookContext) -> None:
-                if on_turn_saved and context.tool_calls:
-                    on_turn_saved(context.messages)
-                # Steering: inject interruptions after tool results
-                if interruption_checker and context.tool_calls:
-                    pending = interruption_checker.drain_all()
-                    if pending:
-                        combined = "\n\n---\n\n".join(m.content for m in pending)
-                        injection = (
-                            "[The user just sent a new message while you were working. "
-                            "Read it and decide: continue current work, switch to the "
-                            "new request, or address both.]\n\n" + combined
-                        )
-                        context.messages.append({"role": "user", "content": injection})
-                        logger.info("Steering: injected {} interruption(s)", len(pending))
-                        if on_progress:
-                            await on_progress(
-                                "New message merged into current conversation",
-                                tool_hint=True,
-                            )
 
         result = await self.runner.run(AgentRunSpec(
             initial_messages=initial_messages,
