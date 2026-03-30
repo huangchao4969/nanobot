@@ -164,6 +164,13 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
                     coalesced_messages[-1]["content"] = [{"type": "text", "text": prev_content}] + curr_content
                 elif isinstance(prev_content, list) and isinstance(curr_content, str):
                     coalesced_messages[-1]["content"] = prev_content + [{"type": "text", "text": curr_content}]
+                    
+                # Merge tool_calls if present
+                if "tool_calls" in msg and msg["tool_calls"]:
+                    if "tool_calls" not in coalesced_messages[-1] or not coalesced_messages[-1]["tool_calls"]:
+                        coalesced_messages[-1]["tool_calls"] = msg["tool_calls"].copy()
+                    else:
+                        coalesced_messages[-1]["tool_calls"].extend(msg["tool_calls"])
             else:
                 coalesced_messages.append(msg.copy())
 
