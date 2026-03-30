@@ -235,6 +235,11 @@ class ChannelManager:
                     )
                     return
                 delay = _SEND_RETRY_DELAYS[min(attempt, len(_SEND_RETRY_DELAYS) - 1)]
+                
+                # Handle Telegram RetryAfter specifically
+                if type(e).__name__ == "RetryAfter" and hasattr(e, "retry_after"):
+                    delay = max(delay, float(e.retry_after))
+                    
                 logger.warning(
                     "Send to {} failed (attempt {}/{}): {}, retrying in {}s",
                     msg.channel, attempt + 1, max_attempts, type(e).__name__, delay
