@@ -325,6 +325,7 @@ class AgentLoop:
         channel: str = "cli",
         chat_id: str = "direct",
         message_id: str | None = None,
+        on_turn_saved: Callable[[list[dict]], None] | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop.
 
@@ -332,6 +333,10 @@ class AgentLoop:
         *on_stream_end(resuming)*: called when a streaming session finishes.
         ``resuming=True`` means tool calls follow (spinner should restart);
         ``resuming=False`` means this is the final response.
+
+        *on_turn_saved*, when provided, is called with the full message list
+        after each tool-call iteration so the caller can persist intermediate
+        state (e.g. /stop, crash).
         """
         loop_hook = _LoopHook(
             self,
@@ -347,6 +352,10 @@ class AgentLoop:
             if self._extra_hooks
             else loop_hook
         )
+
+            async def after_iteration(self, context: AgentHookContext) -> None:
+                if on_turn_saved and context.tool_calls:
+                    on_turn_saved(context.messages)
 
         result = await self.runner.run(AgentRunSpec(
             initial_messages=initial_messages,
@@ -500,11 +509,21 @@ class AgentLoop:
                 current_message=msg.content, channel=channel, chat_id=chat_id,
                 current_role=current_role,
             )
+            save_offset = [1 + len(history)]
+
+            def _incremental_save(msgs: list[dict]) -> None:
+                self._save_turn(session, msgs, save_offset[0])
+                save_offset[0] = len(msgs)
+                self.sessions.save(session)
+
             final_content, _, all_msgs = await self._run_agent_loop(
-                messages, channel=channel, chat_id=chat_id,
+                messages,
+                channel=channel,
+                chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
+                on_turn_saved=_incremental_save,
             )
-            self._save_turn(session, all_msgs, 1 + len(history))
+            self._save_turn(session, all_msgs, save_offset[0])
             self.sessions.save(session)
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
             return OutboundMessage(channel=channel, chat_id=chat_id,
@@ -545,19 +564,28 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
+        save_offset = [1 + len(history)]
+
+        def _incremental_save(msgs: list[dict]) -> None:
+            self._save_turn(session, msgs, save_offset[0])
+            save_offset[0] = len(msgs)
+            self.sessions.save(session)
+
         final_content, _, all_msgs = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
-            channel=msg.channel, chat_id=msg.chat_id,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
+            on_turn_saved=_incremental_save,
         )
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history))
+        self._save_turn(session, all_msgs, save_offset[0])
         self.sessions.save(session)
         self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
 
