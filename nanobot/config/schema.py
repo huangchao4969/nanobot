@@ -42,6 +42,12 @@ class AgentDefaults(Base):
     max_tool_iterations: int = 40
     reasoning_effort: str | None = None  # low / medium / high - enables LLM thinking mode
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
+    mini_planner_enabled: bool = False
+    mini_planner_max_steps: int = 5
+    mini_planner_min_query_chars: int = 90
+    retrieval_enabled: bool = False
+    retrieval_max_chunks: int = 3
+    retrieval_max_chars: int = 1800
 
 
 class AgentsConfig(Base):
@@ -154,6 +160,7 @@ class ToolsConfig(Base):
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
+    tool_profile: Literal["safe", "default", "full"] = "default"  # safe = read/search/web only, default/full = existing behavior
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 

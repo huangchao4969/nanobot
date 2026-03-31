@@ -79,6 +79,13 @@ class Nanobot:
             restrict_to_workspace=config.tools.restrict_to_workspace,
             mcp_servers=config.tools.mcp_servers,
             timezone=defaults.timezone,
+            tool_profile=config.tools.tool_profile,
+            mini_planner_enabled=defaults.mini_planner_enabled,
+            mini_planner_max_steps=defaults.mini_planner_max_steps,
+            mini_planner_min_query_chars=defaults.mini_planner_min_query_chars,
+            retrieval_enabled=defaults.retrieval_enabled,
+            retrieval_max_chunks=defaults.retrieval_max_chunks,
+            retrieval_max_chars=defaults.retrieval_max_chars,
         )
         return cls(loop)
 
