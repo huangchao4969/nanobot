@@ -54,6 +54,7 @@ class _LoopHook(AgentHook):
         channel: str = "cli",
         chat_id: str = "direct",
         message_id: str | None = None,
+        on_turn_saved: Callable[[list[dict]], None] | None = None,
     ) -> None:
         self._loop = agent_loop
         self._on_progress = on_progress
@@ -62,6 +63,7 @@ class _LoopHook(AgentHook):
         self._channel = channel
         self._chat_id = chat_id
         self._message_id = message_id
+        self._on_turn_saved = on_turn_saved
         self._stream_buf = ""
 
     def wants_streaming(self) -> bool:
@@ -98,6 +100,8 @@ class _LoopHook(AgentHook):
         self._loop._set_tool_context(self._channel, self._chat_id, self._message_id)
 
     async def after_iteration(self, context: AgentHookContext) -> None:
+        if self._on_turn_saved and context.tool_calls:
+            self._on_turn_saved(context.messages)
         u = context.usage or {}
         logger.debug(
             "LLM usage: prompt={} completion={} cached={}",
@@ -346,16 +350,13 @@ class AgentLoop:
             channel=channel,
             chat_id=chat_id,
             message_id=message_id,
+            on_turn_saved=on_turn_saved,
         )
         hook: AgentHook = (
             _LoopHookChain(loop_hook, self._extra_hooks)
             if self._extra_hooks
             else loop_hook
         )
-
-            async def after_iteration(self, context: AgentHookContext) -> None:
-                if on_turn_saved and context.tool_calls:
-                    on_turn_saved(context.messages)
 
         result = await self.runner.run(AgentRunSpec(
             initial_messages=initial_messages,
