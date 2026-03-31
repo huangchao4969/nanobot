@@ -27,13 +27,14 @@ from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
 from nanobot.bus.events import InboundMessage, OutboundMessage
+from nanobot.utils.helpers import build_status_content, trim_history_for_budget
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
-    from nanobot.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
+    from nanobot.config.schema import ChannelsConfig, ExecToolConfig, InputLimitsConfig, WebSearchConfig
     from nanobot.cron.service import CronService
 
 
@@ -173,18 +174,22 @@ class AgentLoop:
         model: str | None = None,
         max_iterations: int = 40,
         context_window_tokens: int = 65_536,
+        context_budget_tokens: int = 0,
         web_search_config: WebSearchConfig | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
+        input_limits: InputLimitsConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
+        extra_read: list[str] | None = None,
+        extra_write: list[str] | None = None,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
         timezone: str | None = None,
         hooks: list[AgentHook] | None = None,
     ):
-        from nanobot.config.schema import ExecToolConfig, WebSearchConfig
+        from nanobot.config.schema import ExecToolConfig, InputLimitsConfig, WebSearchConfig
 
         self.bus = bus
         self.channels_config = channels_config
@@ -193,11 +198,15 @@ class AgentLoop:
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
         self.context_window_tokens = context_window_tokens
+        self.context_budget_tokens = max(context_budget_tokens, 500) if context_budget_tokens > 0 else 0
         self.web_search_config = web_search_config or WebSearchConfig()
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
+        self.input_limits = input_limits or InputLimitsConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.extra_read = extra_read or []
+        self.extra_write = extra_write or []
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
@@ -215,6 +224,8 @@ class AgentLoop:
             web_proxy=web_proxy,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
+            extra_read=self.extra_read,
+            extra_write=self.extra_write,
         )
 
         self._running = False
@@ -246,8 +257,8 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        allowed_dir = self.workspace if self.restrict_to_workspace else None
-        extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
+        allowed_dir: list[Path] = ([self.workspace] + ([Path(p) for p in self.extra_write] if self.extra_write else [])) if self.restrict_to_workspace else None
+        extra_read: list[Path] = ([BUILTIN_SKILLS_DIR] + ([Path(p) for p in self.extra_read] if self.extra_read else [])) if allowed_dir else None
         self.tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read))
         for cls in (WriteFileTool, EditFileTool, ListDirTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
@@ -304,16 +315,52 @@ class AgentLoop:
         from nanobot.utils.helpers import strip_think
         return strip_think(text) or None
 
-    @staticmethod
-    def _tool_hint(tool_calls: list) -> str:
+    def _tool_hint(self, tool_calls: list) -> str:
         """Format tool calls as concise hint, e.g. 'web_search("query")'."""
+        workspace_str = str(self.workspace)
+        
         def _fmt(tc):
             args = (tc.arguments[0] if isinstance(tc.arguments, list) else tc.arguments) or {}
-            val = next(iter(args.values()), None) if isinstance(args, dict) else None
+            
+            val = None
+            if isinstance(args, dict):
+                # Iterate through all string values to find the first meaningful one
+                for v in args.values():
+                    if isinstance(v, str):
+                        val = v
+                        break
+                            
             if not isinstance(val, str):
                 return tc.name
+                
+            if self.restrict_to_workspace:
+                import os
+                # If it looks like an absolute path, normalize it to resolve '..' and '.'
+                if os.path.isabs(val):
+                    val = os.path.normpath(val)
+                # Replace workspace path with empty string to hide it
+                if workspace_str in val:
+                    val = val.replace(workspace_str, "").lstrip("\\/")
+                
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
+            
         return ", ".join(_fmt(tc) for tc in tool_calls)
+
+    def _trim_history_for_budget(
+        self,
+        messages: list[dict],
+        turn_start_index: int,
+        iteration: int,
+    ) -> list[dict]:
+        """Thin wrapper: delegates to trim_history_for_budget helper."""
+        return trim_history_for_budget(
+            messages,
+            turn_start_index,
+            iteration,
+            self.context_budget_tokens,
+            Session._find_legal_start,
+        )
+
 
     async def _run_agent_loop(
         self,

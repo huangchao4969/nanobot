@@ -455,6 +455,7 @@ class TelegramChannel(BaseChannel):
         text: str,
         reply_params=None,
         thread_kwargs: dict | None = None,
+        disable_notification: bool = False,
     ) -> None:
         """Send a plain text message with HTML fallback."""
         try:
@@ -463,6 +464,7 @@ class TelegramChannel(BaseChannel):
                 self._app.bot.send_message,
                 chat_id=chat_id, text=html, parse_mode="HTML",
                 reply_parameters=reply_params,
+                disable_notification=disable_notification,
                 **(thread_kwargs or {}),
             )
         except Exception as e:
@@ -473,6 +475,7 @@ class TelegramChannel(BaseChannel):
                     chat_id=chat_id,
                     text=text,
                     reply_parameters=reply_params,
+                    disable_notification=disable_notification,
                     **(thread_kwargs or {}),
                 )
             except Exception as e2:

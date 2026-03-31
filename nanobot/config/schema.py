@@ -137,6 +137,14 @@ class ExecToolConfig(Base):
     timeout: int = 60
     path_append: str = ""
 
+
+class InputLimitsConfig(Base):
+    """Limits for user-provided multimodal inputs."""
+
+    max_input_images: int = 3
+    max_input_image_bytes: int = 10 * 1024 * 1024
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -149,12 +157,21 @@ class MCPServerConfig(Base):
     tool_timeout: int = 30  # seconds before a tool call is cancelled
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
 
+class WorkspaceRestrictionConfig(Base):
+    """Configuration for workspace restriction."""
+
+    enabled: bool = False  # If true, restrict all tool access to workspace directory
+    extra_write: list[str] = Field(default_factory=list)  # Additional paths allowed for writing and reading when enabled
+    extra_read: list[str] = Field(default_factory=list)  # Additional paths allowed for reading when enabled
+
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
-    restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
+    input_limits: InputLimitsConfig = Field(default_factory=InputLimitsConfig)
+    restrict_to_workspace: WorkspaceRestrictionConfig = Field(default_factory=WorkspaceRestrictionConfig)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
