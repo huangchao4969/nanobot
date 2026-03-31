@@ -31,6 +31,7 @@ async def test_on_stream_forwards_message_metadata() -> None:
     loop.bus = bus
     loop._session_locks = {}
     loop._concurrency_gate = None
+    loop._interrupt_checkers = {}
 
     async def fake_process_message(msg_in, **kwargs):
         on_stream = kwargs.get("on_stream")
@@ -47,7 +48,6 @@ async def test_on_stream_forwards_message_metadata() -> None:
     with patch.object(loop, "_process_message", side_effect=fake_process_message):
         await loop._dispatch(msg)
 
-    # Collect all outbound messages (stream delta, stream end, final response)
     outbound: list[OutboundMessage] = []
     while not bus.outbound.empty():
         outbound.append(await bus.outbound.get())
@@ -70,6 +70,7 @@ async def test_on_stream_end_forwards_message_metadata() -> None:
     loop.bus = bus
     loop._session_locks = {}
     loop._concurrency_gate = None
+    loop._interrupt_checkers = {}
 
     async def fake_process_message(msg_in, **kwargs):
         on_stream = kwargs.get("on_stream")
@@ -109,6 +110,7 @@ async def test_streaming_preserves_arbitrary_metadata_keys() -> None:
     loop.bus = bus
     loop._session_locks = {}
     loop._concurrency_gate = None
+    loop._interrupt_checkers = {}
 
     async def fake_process_message(msg_in, **kwargs):
         on_stream = kwargs.get("on_stream")

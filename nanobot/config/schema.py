@@ -43,7 +43,6 @@ class AgentDefaults(Base):
     context_budget_tokens: int = 0  # Max old-history tokens during tool iterations (0 = no trim)
     reasoning_effort: str | None = None  # low / medium / high - enables LLM thinking mode
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
-    enable_steering: bool = False  # Dual-layer architecture: interruption checking + context hooks
 
 
 class AgentsConfig(Base):
