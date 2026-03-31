@@ -59,7 +59,7 @@ class Session:
                 if tid and str(tid) not in declared:
                     start = i + 1
                     declared.clear()
-                    for prev in messages[start:i + 1]:
+                    for prev in messages[start:i]:
                         if prev.get("role") == "assistant":
                             for tc in prev.get("tool_calls") or []:
                                 if isinstance(tc, dict) and tc.get("id"):
