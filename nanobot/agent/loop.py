@@ -171,6 +171,7 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
+        fallback_models: list[str] | None = None,
         max_iterations: int = 40,
         context_window_tokens: int = 65_536,
         web_search_config: WebSearchConfig | None = None,
@@ -191,6 +192,7 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        self.fallback_models = fallback_models
         self.max_iterations = max_iterations
         self.context_window_tokens = context_window_tokens
         self.web_search_config = web_search_config or WebSearchConfig()
@@ -498,6 +500,7 @@ class AgentLoop:
             messages = self.context.build_messages(
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
+            fallback_models=self.fallback_models,
                 current_role=current_role,
             )
             final_content, _, all_msgs = await self._run_agent_loop(
